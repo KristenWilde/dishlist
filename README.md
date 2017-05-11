@@ -13,7 +13,9 @@ Before running the program:
    For Cloud 9, see https://community.c9.io/t/setting-up-postgresql/1573
 2. Run the command `bundle install` from this directory.
 3. Create and populate the database with the following two commands:
+
       `createdb recipes`
+
       `psql recipes < recipes.sql`
 4. Run the command `chmod +x recipe`. This gives permission to execute the file.
 These steps need only be done once. 
