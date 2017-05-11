@@ -1,0 +1,303 @@
+#! /usr/bin/env ruby
+
+# This version of the recipe program uses a PostgreSQL database, rather 
+# than a yaml file, to store recipe data. 
+# The user interacts with the RecipeSession class, which holds an array of Recipe 
+# objects in the variable @recipes. It interacts only with the Recipe class.
+# The Recipe class interacts with the DBInterface class, which is responsible for all 
+# interactions with the database.
+# 
+# A few steps that must be taken before running this program:
+# 1. Have PostgreSQL installed. 
+#    - For Mac, see https://launchschool.com/blog/how-to-install-postgresql-on-a-mac
+#    - Cloud 9, see https://community.c9.io/t/setting-up-postgresql/1573
+# 2. Run the command 'bundle install' from the directory that contains this file. 
+#    This will install the pg gem. (If this doesn't work, first run 'gem install bundler.')
+# 3. Run the command 'pg_restore -C -d recipes recipes.dump' to create and populate 
+#    the database.
+# 4. Run the command 'chmod +x recipe'. This gives permission to execute the file.
+# These steps need only be done once. 
+#
+# Run the command ./recipe from the command line to run the program.
+
+
+require 'pg'
+
+class DBInterface
+
+  def initialize
+    @db = PG.connect(dbname: 'recipes')
+  end
+
+  def get_list
+    list = []
+    recipe_ids.each do |id|
+      sql = "select title, directions from recipes where id=#{id};"
+      results = @db.exec(sql).first
+      title = results["title"]
+      recipe = Recipe.new(title)
+
+      directions = results["directions"]
+      recipe.add_directions(directions)
+
+      sql = "select ingredient from ingredients where recipe_id=#{id};"
+      ingredients = @db.exec(sql).values.flatten
+      ingredients.each { |ing| recipe.add_ingredient(ing) }
+      
+      sql = "select tag from tags join recipes_tags on tag_id = id where recipe_id = #{id}"
+      tags = @db.exec(sql).values.flatten
+      tags.each { |tag| recipe.add_tag(tag)}
+
+      list << recipe
+    end
+
+    list
+  end
+
+  def add_to_database(recipe_obj)
+    recipe_id = recipe_ids.max.to_i + 1
+    
+    # title & directions
+    sql = "insert into recipes (id, title, directions) values ($1, $2, $3)"
+    @db.exec_params(sql, [recipe_id, recipe_obj.title, recipe_obj.directions])
+
+    # ingredients
+    sql = "insert into ingredients (recipe_id, ingredient) values ($1, $2)"
+    recipe_obj.ingredients.each do |ingredient_string|
+      @db.exec_params(sql, [recipe_id, ingredient_string])
+    end
+
+    # tags
+    recipe_obj.tags.each do |tag_name|
+      id = tag_id(tag_name)
+      unless id 
+        id = new_tag_id
+        sql = "insert into tags (id, tag) values ($1, $2)"
+        @db.exec_params(sql, [id, tag_name])
+      end
+      sql = "insert into recipes_tags (recipe_id, tag_id) values ($1, $2)"
+      @db.exec_params(sql, [recipe_id, id])
+    end
+  end
+
+  private
+
+  def recipe_ids
+    @db.exec("select id from recipes").values.flatten
+  end
+
+  def tag_id(tag_name)
+    tag_id = @db.exec("select id from tags where tag = '#{tag_name}'").values.flatten.first
+    # returns number string or nil.
+  end
+
+  def new_tag_id
+    @db.exec("select max(id) from tags").values.flatten.first.to_i + 1
+  end
+
+end
+
+class Recipe
+  attr_accessor :title, :directions, :ingredients, :tags
+  
+  def self.get_list
+    @application = DBInterface.new
+    @application.get_list 
+  end
+
+  def initialize(title)
+    @title = title
+    @directions = ''
+    @ingredients = []
+    @tags = []
+  end 
+  
+  def add_ingredient(ingredient) 
+    @ingredients << ingredient
+  end
+  
+  def add_directions(string)
+    @directions = string
+  end
+
+  def add_tag(tag)
+    @tags << tag
+  end
+
+  def to_s 
+    <<~RECIPE
+    #{@title.upcase}
+
+    Ingredients:
+    #{@ingredients.join("\n")}
+
+    Directions: 
+    #{wrap_text(@directions)}
+    Tags: #{@tags.join(', ')}
+    RECIPE
+  end 
+
+  def self.save(recipe_obj)
+    @application.add_to_database(recipe_obj)
+  end
+
+  private
+
+  def wrap_text(string, line_width = 80)
+    string.gsub(/(.{0,#{line_width}})(\s|\Z)/, "\\1\n")
+  end
+end
+
+class RecipeSession
+  
+  def initialize
+    @recipes = Recipe.get_list
+    @current_user_input = nil
+  end
+  
+  def session
+    system 'clear'
+    welcome_message
+    loop do 
+      display_recipes
+      user_menu_choice
+      case @choice
+      when 'q'
+        break
+      when 'n'
+        enter_new_recipe
+      else
+        display_single_recipe
+      end
+      system 'clear'
+    end
+    goodbye_message
+  end
+  
+  def user_menu_choice
+    choice = nil
+    loop do
+      puts "Please choose an option:"
+      puts "View a recipe (Enter a recipe number)"
+      puts "Add a new recipe (press N)"
+      puts "Exit the program (press Q)"
+      puts ""
+      choice = gets.chomp.downcase
+      break if valid_menu_options.include?(choice)
+      puts "Sorry, invalid answer."
+    end
+    @choice = choice
+  end
+  
+  def valid_menu_options
+    menu_options = ['n', 'q']
+    (1..@recipes.count).each { |num| menu_options << num.to_s }
+    menu_options
+  end
+
+  def display_recipes
+    @recipes.each_with_index do |recipe, idx|
+      puts "#{idx+1}. #{recipe.title}"
+    end
+    puts ""
+  end
+  
+  def display_single_recipe
+    system 'clear'
+    @current_recipe = @recipes[@choice.to_i - 1]
+    puts @current_recipe
+    puts ""
+    loop do
+      puts "Press Enter to return to the main menu."
+      answer = gets.chomp
+      break if answer.size.zero?
+      puts "Sorry, invalid answer." 
+    end
+  end
+  
+  def enter_new_recipe
+    loop do
+      @new_recipe = Recipe.new(user_input('What is the name of the recipe?'))
+
+      enter_ingredients
+      
+      @new_recipe.add_directions(user_input('What are the directions?'))
+
+      enter_tags
+
+      Recipe.save(@new_recipe)
+
+      @recipes = Recipe.get_list
+
+      puts "Enter another recipe? (y/n)"
+      answer = nil
+      loop do 
+        answer = gets.chomp.downcase[0]
+        break if ['y', 'n'].include?(answer)
+        puts "Sorry, that is not a valid answer."
+      end
+      break if answer == 'n'
+    end
+    puts ""
+  end
+  
+  def user_input(question)
+    answer = nil
+    loop do
+      puts question
+      answer = gets.chomp
+      break if !answer.length.zero? && answer[0] != ' '
+      puts "Sorry, that is not a valid answer."
+      puts ""
+    end
+    puts ""
+    answer
+  end
+  
+  def enter_ingredients
+    @current_user_input = nil
+    loop do
+      loop do
+        puts "Please enter an ingredient or 'd' for done."
+        puts "Example: 1/4 cup milk"
+        puts ""
+        @current_user_input = gets.chomp
+        break if !@current_user_input.length.zero? && 
+                 @current_user_input[0] != ' '
+        puts "Sorry, that is not a valid ingredient."
+      end
+      break if @current_user_input == 'd' 
+      @new_recipe.add_ingredient(@current_user_input)
+      puts ""
+    end
+  end
+
+  def enter_tags
+  @current_user_input = nil
+    loop do
+      loop do
+        puts "Please enter a tag or 'd' for done."
+        puts "Example: breakfast"
+        puts ""
+        @current_user_input = gets.chomp
+        break if !@current_user_input.length.zero? && 
+                 @current_user_input[0] != ' '
+        puts "Sorry, that is not a valid tag."
+      end
+      break if @current_user_input == 'd' 
+      @new_recipe.add_tag(@current_user_input)
+      puts ""
+    end
+  end
+  
+  def welcome_message
+    puts "Welcome to the Recipe List."
+    puts
+  end
+  
+  def goodbye_message
+    puts "Goodbye!"
+  end
+end
+
+RecipeSession.new.session
