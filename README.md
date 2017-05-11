@@ -11,13 +11,12 @@ Before running the program:
 1. Have PostgreSQL installed. 
    For Mac, see https://launchschool.com/blog/how-to-install-postgresql-on-a-mac
    For Cloud 9, see https://community.c9.io/t/setting-up-postgresql/1573
-2. Run the command 'bundle install' from this directory file. If this doesn't 
-   work, first run 'gem install bundler'
+2. Run the command `bundle install` from this directory.
 3. Create and populate the database with the following two commands:
-      createdb recipes
-      psql recipes < recipes.sql
-4. Run the command 'chmod +x recipe'. This gives permission to execute the file.
+      `createdb recipes`
+      `psql recipes < recipes.sql`
+4. Run the command `chmod +x recipe`. This gives permission to execute the file.
 These steps need only be done once. 
 
 To start the program, from the command line run:
-      ./recipe 
+      `./recipe` 
